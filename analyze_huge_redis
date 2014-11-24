@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+"""
+A Redis analysis tool for huge redis databases.
+
+Copyright (c) 2014 Jimmy Shen
+"""
+
+__author__ = 'Jimmy Shen'
+
+
+import re
+import sys
+import argparse
+import json
+import operator
+from collections import defaultdict
+from urlparse import urlparse
+
+from redis import Redis
+
+
+def redis_from_url(url):
+    url = urlparse(args.redis_url)
+
+    if url.scheme != 'redis':
+        return None
+
+    db = 0
+    match = re.match('^/(\d+)$', url.path)
+    if match:
+        db = int(match.group(1))
+
+    hostname = url.hostname or 'localhost'
+    password = url.password or None
+    port = url.port or 6379
+
+    return Redis(host=hostname, port=port, password=password, db=db)
+
+
+def default_matcher(value):
+    return value
+
+
+def regex_matcher(rules):
+    def matcher(value):
+        for pattern, label in rules:
+            if pattern.search(value):
+                return label
+        return value
+
+    return matcher
+
+
+def randomscanner(redis):
+    def scanner():
+        while True:
+            yield redis.randomkey()
+
+    return scanner()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Analyzes keyspace of huge Redis databases')
+    parser.add_argument('redis_url', type=str, help='Redis URL')
+    parser.add_argument('--mode', type=str, default='scan', choices=(['scan', 'random']), help='Choose key scan method (default: scan)')
+    parser.add_argument('--rules', type=file, help='Rules JSON file')
+    parser.add_argument('--limit', type=int, help='Limit number of keys to scan')
+    parser.add_argument('--account', action='store_true', help='Account # of bytes used (DEBUG OBJECT must be available)')
+    parser.add_argument('--heartbeat', type=int, help='Print to stdout every...')
+
+    args = parser.parse_args()
+
+    limit = args.limit
+    redis = redis_from_url(args.redis_url)
+
+    matcher = default_matcher
+
+    if args.rules:
+        rules = []
+        pattern_list = json.loads(args.rules.read())
+
+        for pattern in pattern_list:
+            rules.append((re.compile(pattern['pattern']), unicode(pattern['label'])))
+
+        matcher = regex_matcher(rules)
+
+        args.rules.close()
+
+    if not redis.ping():
+        sys.exit('Could not reach Redis @ %s' % (args.redis_url,))
+
+    if args.mode == 'random':
+        if not args.limit:
+            sys.exit('Must provide limit if using randomkeys')
+
+        scanner = randomscanner(redis)
+    else:
+        scanner = redis.scan_iter(count=1000)
+
+    scanned = 0
+    total_bytes = 0
+    heartbeat = args.heartbeat
+    freq = defaultdict(int)
+    acct = defaultdict(int)
+
+    for key in scanner:
+        bucket = matcher(key)
+        freq[bucket] += 1
+        scanned += 1
+
+        if args.account:
+            bytes_used = redis.debug_object(key).get('serializedlength', 0)
+
+            acct[bucket] += bytes_used
+            total_bytes += bytes_used
+
+        if heartbeat and scanned > 0 and (scanned % heartbeat) == 0:
+            print scanned, 'keys scanned'
+
+        if limit and scanned >= limit:
+            break
+
+    biggest_key = max(map(len, freq.keys())) + 1
+
+    print
+    print 'Summary'
+    print '-------'
+
+    if args.account:
+        fmt = '%-{}s: %d (%.1f%%) [used=%.1fkb (%.1f%%)]'.format(biggest_key)
+
+        for key, count in sorted(freq.items(), reverse=True, key=operator.itemgetter(1)):
+            print fmt % (key, count, count / float(scanned) * 100, acct[key] / 1024.0, acct[key] / float(total_bytes) * 100)
+    else:
+        fmt = '%-{}s: %d (%.1f%%)'.format(biggest_key)
+
+        for key, count in sorted(freq.items(), reverse=True, key=operator.itemgetter(1)):
+            print fmt % (key, count, count / float(scanned) * 100)
+
+
+
