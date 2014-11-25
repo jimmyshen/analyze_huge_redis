@@ -181,5 +181,9 @@ if __name__ == '__main__':
     if args.account:
         analyzer.enable_key_accounting(use_debug_object=args.use_debug_object)
 
-    analyzer.analyze()
-    analyzer.summarize()
+    try:
+        analyzer.analyze()
+    except KeyboardInterrupt:
+        print "Stopping analysis..."
+    finally:
+        analyzer.summarize()
