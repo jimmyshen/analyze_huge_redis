@@ -38,26 +38,108 @@ def redis_from_url(url):
     return Redis(host=hostname, port=port, password=password, db=db)
 
 
-def default_matcher(value):
-    return value
+class Analyzer(object):
+    def __init__(self, redis):
+        self.redis = redis
+        self.scan_limit = None
+        self.heartbeat = None
+        self.reset()
 
+    def reset(self):
+        self.key_matcher = self.default_matcher
+        self.key_scanner = self.create_scanner()
+        self.key_accounter = None
+        self.key_freq = defaultdict(int)
+        self.key_bytes = defaultdict(int)
+        self.total_scanned = 0
+        self.total_bytes = 0
 
-def regex_matcher(rules):
-    def matcher(value):
-        for pattern, label in rules:
-            if pattern.search(value):
-                return label
+    def set_match_rules(self, rules):
+        self.key_matcher = self.create_regexp_matcher(rules)
+
+    def use_scan(self):
+        self.key_scanner = self.create_scanner()
+
+    def use_randomkey(self):
+        self.key_scanner = self.create_randomscanner()
+
+    def enable_key_accounting(self, use_debug_object=False):
+        self.key_accounter = self.get_obj_size_using_debug_object if use_debug_object else self.get_obj_size_using_dump
+
+    def disable_key_accounting(self):
+        self.key_accounter = None
+
+    def analyze(self):
+        for key in self.key_scanner:
+            bucket = self.key_matcher(key)
+            self.key_freq[bucket] += 1
+            self.total_scanned += 1
+
+            if self.key_accounter:
+                bytes_used = self.key_accounter(key)
+
+                self.key_bytes[bucket] += bytes_used
+                self.total_bytes += bytes_used
+
+            if self.heartbeat and self.total_scanned > 0 and (self.total_scanned % self.heartbeat) == 0:
+                print self.total_scanned, 'keys scanned'
+
+            if self.scan_limit and self.total_scanned >= self.scan_limit:
+                break
+
+    def summarize(self):
+        biggest_key = max(map(len, self.key_freq.keys())) + 1
+
+        print
+        print 'Summary'
+        print '-------'
+
+        if self.key_accounter:
+            fmt = '%-{}s: %d (%.1f%%) [used=%.1fkb (%.1f%%)]'.format(biggest_key)
+
+            for key, count in sorted(self.key_freq.items(), reverse=True, key=operator.itemgetter(1)):
+                bytes_used = self.key_bytes[key]
+                print fmt % (key,
+                             count,
+                             count / float(self.total_scanned) * 100,
+                             bytes_used / 1024.0,
+                             bytes_used / float(self.total_bytes) * 100)
+        else:
+            fmt = '%-{}s: %d (%.1f%%)'.format(biggest_key)
+
+            for key, count in sorted(self.key_freq.items(), reverse=True, key=operator.itemgetter(1)):
+                print fmt % (key, count, count / float(self.total_scanned) * 100)
+
+    def create_scanner(self):
+        return self.redis.scan_iter(count=1000)
+
+    def create_randomscanner(self):
+        def scanner():
+            while True:
+                yield self.redis.randomkey()
+
+        return scanner()
+
+    def get_obj_size_using_dump(self, key):
+        return len(self.redis.dump(key) or 0)
+
+    def get_obj_size_using_debug_object(self, key):
+        value = self.redis.debug_object(key)
+        return value['serializedlength'] if value else 0
+
+    @staticmethod
+    def default_matcher(value):
         return value
 
-    return matcher
+    @staticmethod
+    def create_regexp_matcher(rules):
+        def matcher(value):
+            for pattern, label in rules:
+                if pattern.search(value):
+                    return label
+            return value
 
-
-def randomscanner(redis):
-    def scanner():
-        while True:
-            yield redis.randomkey()
-
-    return scanner()
+        return matcher
 
 
 if __name__ == '__main__':
@@ -66,15 +148,19 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, default='scan', choices=(['scan', 'random']), help='Choose key scan method (default: scan)')
     parser.add_argument('--rules', type=file, help='Rules JSON file')
     parser.add_argument('--limit', type=int, help='Limit number of keys to scan')
-    parser.add_argument('--account', action='store_true', help='Account # of bytes used (DEBUG OBJECT must be available)')
+    parser.add_argument('--account', action='store_true', help='Account # of bytes used')
+    parser.add_argument('--use_debug_object', action='store_true', help='Account for bytes using DEBUG OBJECT')
     parser.add_argument('--heartbeat', type=int, help='Print to stdout every...')
 
     args = parser.parse_args()
 
-    limit = args.limit
     redis = redis_from_url(args.redis_url)
+    if not redis.ping():
+        sys.exit('Could not reach Redis @ %s' % (args.redis_url,))
 
-    matcher = default_matcher
+    analyzer = Analyzer(redis)
+    analyzer.scan_limit = args.limit
+    analyzer.heartbeat = args.heartbeat
 
     if args.rules:
         rules = []
@@ -83,60 +169,17 @@ if __name__ == '__main__':
         for pattern in pattern_list:
             rules.append((re.compile(pattern['pattern']), unicode(pattern['label'])))
 
-        matcher = regex_matcher(rules)
-
+        analyzer.set_match_rules(rules)
         args.rules.close()
-
-    if not redis.ping():
-        sys.exit('Could not reach Redis @ %s' % (args.redis_url,))
 
     if args.mode == 'random':
         if not args.limit:
             sys.exit('Must provide limit if using randomkeys')
 
-        scanner = randomscanner(redis)
-    else:
-        scanner = redis.scan_iter(count=1000)
-
-    scanned = 0
-    total_bytes = 0
-    heartbeat = args.heartbeat
-    freq = defaultdict(int)
-    acct = defaultdict(int)
-
-    for key in scanner:
-        bucket = matcher(key)
-        freq[bucket] += 1
-        scanned += 1
-
-        if args.account:
-            bytes_used = redis.debug_object(key).get('serializedlength', 0)
-
-            acct[bucket] += bytes_used
-            total_bytes += bytes_used
-
-        if heartbeat and scanned > 0 and (scanned % heartbeat) == 0:
-            print scanned, 'keys scanned'
-
-        if limit and scanned >= limit:
-            break
-
-    biggest_key = max(map(len, freq.keys())) + 1
-
-    print
-    print 'Summary'
-    print '-------'
+        analyzer.use_randomkey()
 
     if args.account:
-        fmt = '%-{}s: %d (%.1f%%) [used=%.1fkb (%.1f%%)]'.format(biggest_key)
+        analyzer.enable_key_accounting(use_debug_object=args.use_debug_object)
 
-        for key, count in sorted(freq.items(), reverse=True, key=operator.itemgetter(1)):
-            print fmt % (key, count, count / float(scanned) * 100, acct[key] / 1024.0, acct[key] / float(total_bytes) * 100)
-    else:
-        fmt = '%-{}s: %d (%.1f%%)'.format(biggest_key)
-
-        for key, count in sorted(freq.items(), reverse=True, key=operator.itemgetter(1)):
-            print fmt % (key, count, count / float(scanned) * 100)
-
-
-
+    analyzer.analyze()
+    analyzer.summarize()
