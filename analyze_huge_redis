@@ -14,6 +14,7 @@ import sys
 import argparse
 import json
 import operator
+from itertools import imap
 from collections import defaultdict
 from urlparse import urlparse
 
@@ -39,6 +40,44 @@ def redis_from_url(url):
 
 
 class Analyzer(object):
+    class BufferedAccounter(object):
+        def __init__(self, redis, maxlen=50):
+            self.redis = redis
+            self.maxlen = maxlen
+            self.keys = []
+            self.use_debug_object = False
+
+        def is_empty(self):
+            return not self.keys
+
+        def ready_to_flush(self):
+            return len(self.keys) >= self.maxlen
+
+        def add_key(self, key):
+            self.keys.append(key)
+
+        def flush(self):
+            result = []
+
+            with self.redis.pipeline(transaction=False) as pipe:
+                cmd = pipe.debug_object if self.use_debug_object else pipe.dump
+
+                for key in self.keys:
+                    cmd(key)
+
+                values = pipe.execute()
+
+            if self.use_debug_object:
+                values = imap(operator.itemgetter('serializedlen'), values)
+            else:
+                values = imap(len, values)
+
+            result = zip(self.keys, values)
+
+            self.keys[:] = []
+
+            return result
+
     def __init__(self, redis):
         self.redis = redis
         self.scan_limit = None
@@ -64,7 +103,8 @@ class Analyzer(object):
         self.key_scanner = self.create_randomscanner()
 
     def enable_key_accounting(self, use_debug_object=False):
-        self.key_accounter = self.get_obj_size_using_debug_object if use_debug_object else self.get_obj_size_using_dump
+        self.key_accounter = self.BufferedAccounter(self.redis)
+        self.key_accounter.use_debug_object = use_debug_object
 
     def disable_key_accounting(self):
         self.key_accounter = None
@@ -76,16 +116,23 @@ class Analyzer(object):
             self.total_scanned += 1
 
             if self.key_accounter:
-                bytes_used = self.key_accounter(key)
+                self.key_accounter.add_key(key)
 
-                self.key_bytes[bucket] += bytes_used
-                self.total_bytes += bytes_used
+                if self.key_accounter.ready_to_flush():
+                    for key, bytes_used in self.key_accounter.flush():
+                        self.key_bytes[bucket] += bytes_used
+                        self.total_bytes += bytes_used
 
             if self.heartbeat and self.total_scanned > 0 and (self.total_scanned % self.heartbeat) == 0:
                 print self.total_scanned, 'keys scanned'
 
             if self.scan_limit and self.total_scanned >= self.scan_limit:
                 break
+
+        if self.key_accounter and not self.key_accounter.is_empty():
+            for key, bytes_used in self.key_accounter.flush():
+                self.key_bytes[bucket] += bytes_used
+                self.total_bytes += bytes_used
 
     def summarize(self):
         biggest_key = max(map(len, self.key_freq.keys())) + 1
@@ -120,12 +167,14 @@ class Analyzer(object):
 
         return scanner()
 
-    def get_obj_size_using_dump(self, key):
-        return len(self.redis.dump(key) or 0)
+    @staticmethod
+    def get_obj_size_using_dump(redis, key):
+        return len(redis.dump(key)) or 0
 
-    def get_obj_size_using_debug_object(self, key):
-        value = self.redis.debug_object(key)
-        return value['serializedlength'] if value else 0
+    @staticmethod
+    def get_obj_size_using_debug_object(redis, key):
+        value = redis.debug_object(key)
+        return int(value['serializedlength']) if value else 0
 
     @staticmethod
     def default_matcher(value):
