@@ -135,6 +135,10 @@ class Analyzer(object):
                 self.total_bytes += bytes_used
 
     def summarize(self):
+        if not self.key_freq:
+            print 'There was nothing in the database'
+            return
+
         biggest_key = max(map(len, self.key_freq.keys())) + 1
 
         print
@@ -142,7 +146,7 @@ class Analyzer(object):
         print '-------'
 
         if self.key_accounter:
-            fmt = '%-{}s: %d (%.1f%%) [used=%.1fkb (%.1f%%)]'.format(biggest_key)
+            fmt = '%-{}s: %d (%.1f%%)   Memory: %.1fkb (%.1f%%)]'.format(biggest_key)
 
             for key, count in sorted(self.key_freq.items(), reverse=True, key=operator.itemgetter(1)):
                 bytes_used = self.key_bytes[key]
@@ -151,11 +155,17 @@ class Analyzer(object):
                              count / float(self.total_scanned) * 100,
                              bytes_used / 1024.0,
                              bytes_used / float(self.total_bytes) * 100)
+
+            fmt = '%-{}s %d   Memory: %.2fkb'.format(biggest_key)
+            print fmt % ('Total:', self.total_scanned, self.total_bytes / 1024.0)
         else:
             fmt = '%-{}s: %d (%.1f%%)'.format(biggest_key)
 
             for key, count in sorted(self.key_freq.items(), reverse=True, key=operator.itemgetter(1)):
                 print fmt % (key, count, count / float(self.total_scanned) * 100)
+
+            fmt = '%-{}s %d'.format(biggest_key)
+            print fmt % ('Total:', self.total_scanned)
 
     def create_scanner(self):
         return self.redis.scan_iter(count=1000)
