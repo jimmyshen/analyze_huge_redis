@@ -58,6 +58,6 @@ Memory Use Accounting
 
 If you need to determine the amount of memory consumed by a certain type of key, you can use the --account option.
 By default, this will call "DUMP" on each key that was scanned to determine length of the data (in bytes). You can
-also opt to use DEBUG OBJECT (--use_debug_object) to accomplish this; however--in some environments--this command may
-be disabled.
+also opt to use DEBUG OBJECT (--use_debug_object) to accomplish this (in some environments this command may
+be disabled).
 
