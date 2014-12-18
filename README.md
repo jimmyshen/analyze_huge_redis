@@ -1,7 +1,7 @@
 What is it?
 -----------
 
-Analyzes huge Redis instances given a 'redis URL'.
+Analyzes huge Redis instances given a Redis URL.
 
 Basic Usage
 -----------
@@ -61,3 +61,7 @@ By default, this will call "DUMP" on each key that was scanned to determine leng
 also opt to use DEBUG OBJECT (--use_debug_object) to accomplish this (in some environments this command may
 be disabled).
 
+Performance
+-----------
+
+While the script attempts to reduce RTT to the redis server as much as possible by pipelining commands, it is best to run the script near or on the same host as the Redis server.
