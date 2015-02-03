@@ -84,6 +84,10 @@ class Analyzer(object):
         self.heartbeat = None
         self.reset()
 
+    @property
+    def sampling_enabled(self):
+        return self.sample_size is not None
+
     def reset(self):
         self.key_matcher = self.default_matcher
         self.key_scanner = self.create_scanner()
@@ -92,6 +96,8 @@ class Analyzer(object):
         self.key_bytes = defaultdict(int)
         self.total_scanned = 0
         self.total_bytes = 0
+        self.sample_size = None
+        self.samples = defaultdict(list)
 
     def set_match_rules(self, rules):
         self.key_matcher = self.create_regexp_matcher(rules)
@@ -109,11 +115,18 @@ class Analyzer(object):
     def disable_key_accounting(self):
         self.key_accounter = None
 
+    def enable_sampling(self, sample_size):
+        assert sample_size > 0
+        self.sample_size = sample_size
+
     def analyze(self):
         for key in self.key_scanner:
             bucket = self.key_matcher(key)
             self.key_freq[bucket] += 1
             self.total_scanned += 1
+
+            if self.sampling_enabled and len(self.samples[bucket]) < self.sample_size:
+                self.samples[bucket].append(key)
 
             if self.key_accounter:
                 self.key_accounter.add_key(key)
@@ -133,6 +146,13 @@ class Analyzer(object):
             for key, bytes_used in self.key_accounter.flush():
                 self.key_bytes[bucket] += bytes_used
                 self.total_bytes += bytes_used
+
+    def show_samples(self, bucket, indent=4):
+        spacing = ' ' * indent
+
+        if self.sampling_enabled and bucket in self.samples:
+            for sample in self.samples[bucket]:
+                print spacing + sample
 
     def summarize(self):
         if not self.key_freq:
@@ -156,6 +176,8 @@ class Analyzer(object):
                              bytes_used / 1024.0,
                              bytes_used / float(self.total_bytes) * 100)
 
+                self.show_samples(key)
+
             fmt = '%-{}s %d   Memory: %.2fkb'.format(biggest_key)
             print fmt % ('Total:', self.total_scanned, self.total_bytes / 1024.0)
         else:
@@ -163,6 +185,7 @@ class Analyzer(object):
 
             for key, count in sorted(self.key_freq.items(), reverse=True, key=operator.itemgetter(1)):
                 print fmt % (key, count, count / float(self.total_scanned) * 100)
+                self.show_samples(key)
 
             fmt = '%-{}s %d'.format(biggest_key)
             print fmt % ('Total:', self.total_scanned)
@@ -210,6 +233,7 @@ if __name__ == '__main__':
     parser.add_argument('--account', action='store_true', help='Account # of bytes used')
     parser.add_argument('--use_debug_object', action='store_true', help='Account for bytes using DEBUG OBJECT')
     parser.add_argument('--heartbeat', type=int, help='Print to stdout every...')
+    parser.add_argument('--sample', type=int, help='Show samples of N items for each group')
 
     args = parser.parse_args()
 
@@ -220,6 +244,9 @@ if __name__ == '__main__':
     analyzer = Analyzer(redis)
     analyzer.scan_limit = args.limit
     analyzer.heartbeat = args.heartbeat
+
+    if args.sample and args.sample > 0:
+        analyzer.enable_sampling(args.sample)
 
     if args.rules:
         rules = []
