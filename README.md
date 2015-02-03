@@ -9,8 +9,10 @@ Basic Usage
 ```
 usage: analyze_huge_redis [-h] [--mode {scan,random}] [--rules RULES]
                           [--limit LIMIT] [--account] [--use_debug_object]
-                          [--heartbeat HEARTBEAT]
+                          [--heartbeat HEARTBEAT] [--sample SAMPLE]
                           redis_url
+
+Analyzes keyspace of huge Redis databases
 
 positional arguments:
   redis_url             Redis URL
@@ -24,6 +26,7 @@ optional arguments:
   --use_debug_object    Account for bytes using DEBUG OBJECT
   --heartbeat HEARTBEAT
                         Print to stdout every...
+  --sample SAMPLE       Show samples of N items for each group
 ```
 
 Rules JSON Format
