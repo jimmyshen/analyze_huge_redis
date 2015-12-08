@@ -1,7 +1,7 @@
 What is it?
 -----------
 
-Analyzes huge Redis instances given a Redis URL.
+This script samples a Redis keyspace in order to converge on rough estimates for the number of keys or the space usage of certain keys. It assumes no knowledge of key naming by letting the user define key groupings using regular expressions.
 
 Basic Usage
 -----------
