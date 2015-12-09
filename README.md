@@ -60,11 +60,16 @@ Memory Use Accounting
 ---------------------
 
 If you need to determine the amount of memory consumed by a certain type of key, you can use the --account option.
-By default, this will call "DUMP" on each key that was scanned to determine length of the data (in bytes). You can
-also opt to use DEBUG OBJECT (--use_debug_object) to accomplish this (in some environments this command may
-be disabled).
+By default, this will call `DUMP` on each sampled key to roughly estimate the size of data in bytes. You can
+also opt to use `DEBUG OBJECT` (`--use_debug_object`) to accomplish this, though you will find that in most production deployments of Redis that `DEBUG OBJECT` is explicitly disabled.
 
 Performance
 -----------
 
 While the script attempts to reduce RTT to the redis server as much as possible by pipelining commands, it is best to run the script near or on the same host as the Redis server.
+
+Alternatives
+------------
+
+- (redis-rdb-tools)[https://github.com/sripathikrishnan/redis-rdb-tools] : Offline key analysis of RDB files
+- (redis-audit)[https://github.com/snmaynard/redis-audit] : A similar script for Ruby
