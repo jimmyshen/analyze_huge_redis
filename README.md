@@ -71,5 +71,5 @@ While the script attempts to reduce RTT to the redis server as much as possible 
 Alternatives
 ------------
 
-- (redis-rdb-tools)[https://github.com/sripathikrishnan/redis-rdb-tools] : Offline key analysis of RDB files
-- (redis-audit)[https://github.com/snmaynard/redis-audit] : A similar script for Ruby
+- [redis-rdb-tools](https://github.com/sripathikrishnan/redis-rdb-tools) : Offline key analysis of RDB files
+- [redis-audit](https://github.com/snmaynard/redis-audit) : A similar script for Ruby
